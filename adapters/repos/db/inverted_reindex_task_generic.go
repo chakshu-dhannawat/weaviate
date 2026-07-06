@@ -197,17 +197,21 @@ type ShardReindexTaskGeneric struct {
 	// method; tests substitute a wrapper.
 	processOneTidyPropFn func(propIdx int, propName, lsmPath string) error
 
+	// registerDoubleWriteCallbacksFn dispatches OnAfterLsmInit's ingest-window
+	// double-write registration. Defaults to [registerDoubleWriteCallbacks] in
+	// [NewShardReindexTaskGeneric]; tests wrap it to drive a write into the
+	// markStarted→register window the production ordering must not lose
+	// (weaviate/weaviate#11688). Always set — no test-only branch runs in
+	// production.
+	registerDoubleWriteCallbacksFn func(shard *Shard, props []string,
+		bucketNamer func(string) string, forTargetStrategy bool) func()
+
 	// onPropSwapped runs inside the Phase 2a tight loop right after each
 	// bucket-pointer flip, so a query never observes overlay≠bucket for
 	// longer than one in-memory map write. Runs on the swap goroutine, so
 	// SetTokenizationOverlay's own lock is enough. Wired only for
 	// tokenization-changing migrations.
 	onPropSwapped func(propName string)
-
-	// TEST-ONLY: fires right before the ingest double-write callbacks
-	// register, letting tests inject a write into the markStarted→register
-	// gap (weaviate/weaviate#11688). Nil in production.
-	onBeforeDoubleWriteRegistration func()
 }
 
 // NewShardReindexTaskGeneric creates a new generic reindex task.
@@ -237,6 +241,7 @@ func NewShardReindexTaskGeneric(name string, logger logrus.FieldLogger,
 	}
 	t.processOneSwapPropFn = t.processOneSwapProp
 	t.processOneTidyPropFn = t.processOneTidyProp
+	t.registerDoubleWriteCallbacksFn = t.registerDoubleWriteCallbacks
 	return t
 }
 
@@ -1200,10 +1205,7 @@ func (t *ShardReindexTaskGeneric) OnAfterLsmInit(ctx context.Context, shard *Sha
 			err = fmt.Errorf("starting ingest buckets:%w", err)
 			return err
 		}
-		if t.onBeforeDoubleWriteRegistration != nil {
-			t.onBeforeDoubleWriteRegistration()
-		}
-		disableJustRegistered := t.registerDoubleWriteCallbacks(shard, props, t.ingestBucketName, true)
+		disableJustRegistered := t.registerDoubleWriteCallbacksFn(shard, props, t.ingestBucketName, true)
 
 		// Captured only after callbacks are live, so every write the iterator
 		// skips (LastUpdateTimeUnix >= reindexStarted) is guaranteed mirrored
