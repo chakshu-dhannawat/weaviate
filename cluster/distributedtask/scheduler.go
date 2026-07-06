@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jonboulle/clockwork"
@@ -145,6 +146,21 @@ type Scheduler struct {
 
 	stopCh chan struct{}
 
+	// loopDone is closed by loop() right before it returns. Close() joins
+	// on this instead of just closing stopCh and moving on: without the
+	// join, Close() could return while loop() is still mid-select and about
+	// to fire one more tick (provider callbacks, synchronous RAFT applies)
+	// against a caller that already believes the scheduler is torn down.
+	// See weaviate/0-weaviate-issues#242.
+	loopDone chan struct{}
+
+	// loopStarted records whether Start() ever spawned loop(). Some tests
+	// (e.g. multiSchedulerHarness in scheduler_multinode_test.go) drive
+	// tick() directly for deterministic ordering and never call Start(),
+	// then call Close() for symmetry/leaktest hygiene. Close() must not
+	// join loopDone in that case — nothing would ever close it.
+	loopStarted atomic.Bool
+
 	// wakeCh signals the run loop to fire a scheduling cycle immediately
 	// instead of waiting for the next periodic tick. Sized 1 so concurrent
 	// callers coalesce — a pending wake-up is equivalent to any number of
@@ -212,8 +228,9 @@ func NewScheduler(params SchedulerParams) *Scheduler {
 			Help: "Number of active distributed tasks running per namespace",
 		}, []string{"namespace"}),
 
-		stopCh: make(chan struct{}),
-		wakeCh: make(chan struct{}, 1),
+		stopCh:   make(chan struct{}),
+		wakeCh:   make(chan struct{}, 1),
+		loopDone: make(chan struct{}),
 	}
 }
 
@@ -258,6 +275,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		s.bootstrapProviders(tasksByNamespace)
 	}
 
+	s.loopStarted.Store(true)
 	enterrors.GoWrapper(s.loop, s.logger)
 
 	return nil
@@ -440,6 +458,10 @@ func filterTasks(tasks map[TaskDescriptor]*Task, predicate func(task *Task) bool
 }
 
 func (s *Scheduler) loop() {
+	// Signals Close() that this goroutine has actually exited, not just
+	// that stopCh was closed. See the loopDone field doc.
+	defer close(s.loopDone)
+
 	ticker := s.clock.NewTicker(s.tickInterval)
 	defer ticker.Stop()
 
@@ -1197,6 +1219,14 @@ func (s *Scheduler) recordRunningTaskHandleLocked(namespace string, desc TaskDes
 // until all handles have been signalled. After Close returns, no new ticks will fire.
 func (s *Scheduler) Close() {
 	close(s.stopCh)
+	// Join loop() before terminating handles: without this, Close() could
+	// return (or start terminating handles) while loop() is still running a
+	// tick it picked up racing against stopCh. See the loopDone field doc.
+	// Skipped when Start() never ran (loopDone would then never close) —
+	// see the loopStarted field doc.
+	if s.loopStarted.Load() {
+		<-s.loopDone
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
