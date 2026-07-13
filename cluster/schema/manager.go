@@ -26,6 +26,7 @@ import (
 	"github.com/weaviate/weaviate/cluster/distributedtask"
 	command "github.com/weaviate/weaviate/cluster/proto/api"
 	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modelsext"
 	entSchema "github.com/weaviate/weaviate/entities/schema"
 	"github.com/weaviate/weaviate/usecases/sharding"
 	"github.com/weaviate/weaviate/usecases/usagelimits"
@@ -70,6 +71,10 @@ type MutationGuard interface {
 	// conflict — callers must filter via
 	// [tenantsTransitioningAwayFromActive] before invoking.
 	CheckTenantMutation(className string, tenants []string) error
+
+	// CheckVectorConfigRemoval gates removal of dropped ("none") VectorConfig
+	// entries on a completed cleanup task. Returns non-nil to reject.
+	CheckVectorConfigRemoval(className string, removedVectors []string) error
 }
 
 // Narrow slice of *cluster/distributedtask.Manager so schema doesn't
@@ -224,12 +229,22 @@ func (s *SchemaManager) RestoreLegacy(data []byte, parser Parser) error {
 }
 
 func (s *SchemaManager) PreApplyFilter(req *command.ApplyRequest) error {
-	classInfo := s.schema.ClassInfo(req.Class)
-
-	// Discard restoring a class if it already exists
-	if req.Type == command.ApplyRequest_TYPE_RESTORE_CLASS && classInfo.Exists {
-		s.log.WithField("class", req.Class).Info("class already restored")
-		return fmt.Errorf("class name %s already exists", req.Class)
+	// Discard restoring a class if it, or a similar name, already exists.
+	// ClassEqual mirrors the ADD_CLASS branch below: index directories are
+	// lowercased on disk, so a variable case restore would land its data in
+	// the existing class's directory even though the exact name check passes.
+	if req.Type == command.ApplyRequest_TYPE_RESTORE_CLASS {
+		if other, isAlias := s.schema.ClassEqual(req.Class); other != "" {
+			item := "class"
+			if isAlias {
+				item = "alias"
+			}
+			s.log.WithField("class", req.Class).Infof("restore discarded: %s %q already exists", item, other)
+			if other == req.Class {
+				return fmt.Errorf("%s name %s already exists", item, req.Class)
+			}
+			return fmt.Errorf("%w: found similar %s %q", ErrClassExists, item, other)
+		}
 	}
 
 	// Discard adding class if the name already exists or a similar one exists
@@ -441,6 +456,15 @@ func (s *SchemaManager) UpdateClass(cmd *command.ApplyRequest, nodeID string, sc
 			}
 		}
 
+		// Gate at apply time so the verdict is RAFT-deterministic.
+		if s.mutationGuard != nil {
+			if removed := removedDroppedVectorConfigs(&meta.Class, u); len(removed) > 0 {
+				if err := s.mutationGuard.CheckVectorConfigRemoval(meta.Class.Class, removed); err != nil {
+					return fmt.Errorf("%w: %w", ErrBadRequest, err)
+				}
+			}
+		}
+
 		// Apply updates
 		meta.Class.VectorIndexConfig = u.VectorIndexConfig
 		meta.Class.InvertedIndexConfig = u.InvertedIndexConfig
@@ -473,6 +497,22 @@ func (s *SchemaManager) UpdateClass(cmd *command.ApplyRequest, nodeID string, sc
 			enableSchemaCallback: enableSchemaCallback,
 		},
 	)
+}
+
+// removedDroppedVectorConfigs returns the names of dropped ("none") VectorConfig
+// entries in prev that are absent from next. Only "none" entries: removing a live
+// entry is already rejected by the parser.
+func removedDroppedVectorConfigs(prev, next *models.Class) []string {
+	var removed []string
+	for name, cfg := range prev.VectorConfig {
+		if !modelsext.IsVectorIndexDropped(cfg) {
+			continue
+		}
+		if _, ok := next.VectorConfig[name]; !ok {
+			removed = append(removed, name)
+		}
+	}
+	return removed
 }
 
 func (s *SchemaManager) DeleteClass(cmd *command.ApplyRequest, schemaOnly bool, enableSchemaCallback bool) error {
