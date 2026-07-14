@@ -144,6 +144,7 @@ func (o *SearchBm25OK) GetPayload() *models.SearchResponse {
 }
 
 func (o *SearchBm25OK) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.SearchResponse)
 
 	// response payload
@@ -211,6 +212,7 @@ func (o *SearchBm25BadRequest) GetPayload() *models.ErrorResponse {
 }
 
 func (o *SearchBm25BadRequest) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.ErrorResponse)
 
 	// response payload
@@ -278,6 +280,7 @@ func (o *SearchBm25Unauthorized) GetPayload() *models.ErrorResponse {
 }
 
 func (o *SearchBm25Unauthorized) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.ErrorResponse)
 
 	// response payload
@@ -345,6 +348,7 @@ func (o *SearchBm25Forbidden) GetPayload() *models.ErrorResponse {
 }
 
 func (o *SearchBm25Forbidden) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.ErrorResponse)
 
 	// response payload
@@ -412,6 +416,7 @@ func (o *SearchBm25NotFound) GetPayload() *models.ErrorResponse {
 }
 
 func (o *SearchBm25NotFound) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.ErrorResponse)
 
 	// response payload
@@ -479,6 +484,7 @@ func (o *SearchBm25UnprocessableEntity) GetPayload() *models.ErrorResponse {
 }
 
 func (o *SearchBm25UnprocessableEntity) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.ErrorResponse)
 
 	// response payload
@@ -546,6 +552,7 @@ func (o *SearchBm25TooManyRequests) GetPayload() *models.ErrorResponse {
 }
 
 func (o *SearchBm25TooManyRequests) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.ErrorResponse)
 
 	// response payload
@@ -613,6 +620,7 @@ func (o *SearchBm25InternalServerError) GetPayload() *models.ErrorResponse {
 }
 
 func (o *SearchBm25InternalServerError) readResponse(response runtime.ClientResponse, consumer runtime.Consumer, formats strfmt.Registry) error {
+
 	o.Payload = new(models.ErrorResponse)
 
 	// response payload
