@@ -197,6 +197,18 @@ func (h *Handler) NearText(ctx context.Context, principal *models.Principal,
 	return h.execute(ctx, principal, collection, body.Tenant, &body.SearchCommon, paramsBuilder)
 }
 
+// Bm25 executes a keyword (BM25F) search over collection, supplying execute
+// with the bm25 params builder. It returns the 200 payload or an APIError
+// carrying the HTTP status.
+func (h *Handler) Bm25(ctx context.Context, principal *models.Principal,
+	collection string, body *models.SearchBm25Request,
+) (*models.SearchResponse, *APIError) {
+	paramsBuilder := func(class *models.Class, className string, getClass classGetterFunc) (dto.GetParams, *APIError) {
+		return h.buildBm25Params(class, className, body, getClass, principal)
+	}
+	return h.execute(ctx, principal, collection, body.Tenant, &body.SearchCommon, paramsBuilder)
+}
+
 // dataResources is the authorization resource set for a collection's (or
 // tenant's) data.
 func dataResources(collection, tenant string) []string {
