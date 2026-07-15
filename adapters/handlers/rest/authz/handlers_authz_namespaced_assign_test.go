@@ -24,6 +24,7 @@ import (
 
 	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/authz"
 	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/auth/authentication"
 	"github.com/weaviate/weaviate/usecases/auth/authentication/apikey"
 	"github.com/weaviate/weaviate/usecases/auth/authorization"
 	"github.com/weaviate/weaviate/usecases/auth/authorization/rbac/rbacconf"
@@ -248,6 +249,9 @@ func TestAssignRevokeGlobalCallerNamespacedOIDCTarget(t *testing.T) {
 		controller := NewMockControllerAndGetUsers(t)
 		controller.On("GetRoles", mock.Anything).Return(map[string][]authorization.Policy{"customRole": {}}, nil).Maybe()
 		controller.On("GetRoles", mock.Anything, mock.Anything).Return(map[string][]authorization.Policy{"customRole": {}}, nil).Maybe()
+		// The global-collision lookup finds no slotted twin, so assign/revoke
+		// proceed against the namespaced subject.
+		controller.On("GetRolesForUserOrGroup", ":customer1:carol", authentication.AuthTypeOIDC, false).Return(map[string][]authorization.Policy{}, nil).Maybe()
 		controller.On("AddRolesForUser", mock.Anything, mock.Anything).Return(nil).Maybe()
 		controller.On("RevokeRolesForUser", mock.Anything, mock.Anything).Return(nil).Maybe()
 		logger, _ := test.NewNullLogger()

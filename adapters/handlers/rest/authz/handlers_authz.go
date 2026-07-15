@@ -853,6 +853,13 @@ func (h *authZHandlers) assignRoleToUser(params authz.AssignRoleToUserParams, pr
 		return authz.NewAssignRoleToUserNotFound().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, fmt.Errorf("username to assign role to doesn't exist")))
 	}
 
+	if err := h.namespacedOIDCTargetShadowsGlobal(principal, internalID, authentication.AuthType(params.Body.UserType)); err != nil {
+		if errors.Is(err, errOIDCGlobalCollision) {
+			return authz.NewAssignRoleToUserBadRequest().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, namespacedOIDCShadowErr(params.ID)))
+		}
+		return authz.NewAssignRoleToUserInternalServerError().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, fmt.Errorf("global collision check: %w", err)))
+	}
+
 	isGlobal := namespacing.GlobalSubjectTarget(h.namespacesEnabled, internalID)
 	for _, userType := range userTypes {
 		if err := h.controller.AddRolesForUser(conv.UserNameWithTypeScoped(userType, internalID, isGlobal), roleNames); err != nil {
@@ -1098,6 +1105,13 @@ func (h *authZHandlers) getRolesForUser(params authz.GetRolesForUserParams, prin
 	}
 	if !exists {
 		return authz.NewGetRolesForUserNotFound()
+	}
+
+	if err := h.namespacedOIDCTargetShadowsGlobal(principal, internalID, userType); err != nil {
+		if errors.Is(err, errOIDCGlobalCollision) {
+			return authz.NewGetRolesForUserBadRequest().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, namespacedOIDCShadowErr(params.ID)))
+		}
+		return authz.NewGetRolesForUserInternalServerError().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, fmt.Errorf("global collision check: %w", err)))
 	}
 
 	existingRoles, err := h.controller.GetRolesForUserOrGroup(conv.ScopedSubjectUser(userType, internalID, targetGlobal), userType, false)
@@ -1389,6 +1403,13 @@ func (h *authZHandlers) revokeRoleFromUser(params authz.RevokeRoleFromUserParams
 	if userTypes == nil {
 		return authz.NewRevokeRoleFromUserNotFound().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, fmt.Errorf("username to revoke role from doesn't exist")))
 	}
+	if err := h.namespacedOIDCTargetShadowsGlobal(principal, internalID, authentication.AuthType(params.Body.UserType)); err != nil {
+		if errors.Is(err, errOIDCGlobalCollision) {
+			return authz.NewRevokeRoleFromUserBadRequest().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, namespacedOIDCShadowErr(params.ID)))
+		}
+		return authz.NewRevokeRoleFromUserInternalServerError().WithPayload(cerrors.ErrPayloadFromSingleErr(principal, fmt.Errorf("global collision check: %w", err)))
+	}
+
 	isGlobal := namespacing.GlobalSubjectTarget(h.namespacesEnabled, internalID)
 	for _, userType := range userTypes {
 		if err := h.controller.RevokeRolesForUser(conv.UserNameWithTypeScoped(userType, internalID, isGlobal), roleNames...); err != nil {
@@ -1659,6 +1680,43 @@ func (h *authZHandlers) validateUserTypeForNamespaces(userType models.UserTypeIn
 		return fmt.Errorf("userType is required")
 	}
 	return nil
+}
+
+// errOIDCGlobalCollision classifies the collision the guardrail rejects: a
+// colon-bearing OIDC target that also matches an existing global OIDC user of
+// the same name.
+var errOIDCGlobalCollision = errors.New("OIDC target collides with a global user of the same name")
+
+// namespacedOIDCTargetShadowsGlobal returns errOIDCGlobalCollision when a global
+// caller's colon-bearing OIDC target also matches an existing global OIDC user
+// of that exact name. The namespaced (oidc:<ns>:<name>) and global
+// (oidc::<ns>:<name>) subjects are distinct, so an assign silently lands on the
+// namespaced user and a revoke silently misses the global one. Only a global
+// caller reaches an unqualified id here; a namespaced caller's id is
+// force-qualified into its own namespace by QualifyUserIDForLookup and can never
+// address the global slot. Global users of this shape are addressable only via
+// ADMIN_USERS/VIEWER_USERS. A lookup failure is returned verbatim.
+func (h *authZHandlers) namespacedOIDCTargetShadowsGlobal(principal *models.Principal, internalID string, userType authentication.AuthType) error {
+	if !h.namespacesEnabled ||
+		userType != authentication.AuthTypeOIDC ||
+		namespacing.ConfinedNamespace(principal) != "" ||
+		namespacing.NamespaceFromQualified(internalID) == "" {
+		return nil
+	}
+	roles, err := h.controller.GetRolesForUserOrGroup(conv.ScopedSubjectUser(authentication.AuthTypeOIDC, internalID, true), authentication.AuthTypeOIDC, false)
+	if err != nil {
+		return err
+	}
+	if len(roles) > 0 {
+		return errOIDCGlobalCollision
+	}
+	return nil
+}
+
+// namespacedOIDCShadowErr is the 400 body returned when a colon-bearing OIDC
+// target collides with a global user of the same name.
+func namespacedOIDCShadowErr(id string) error {
+	return fmt.Errorf("cannot manage OIDC user %q: its name collides with a global user of the same name, which is addressable only via ADMIN_USERS/VIEWER_USERS", id)
 }
 
 // resolveAssignableRoles maps caller-supplied role names to their stored form

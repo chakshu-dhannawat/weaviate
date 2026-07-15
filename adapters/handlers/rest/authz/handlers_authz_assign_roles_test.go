@@ -912,6 +912,13 @@ func TestUserIDNamespacePrefixRequiredOnNSEnabled(t *testing.T) {
 
 			isStatic := slices.Contains(tt.staticAPIKeyUsers, tt.userID)
 
+			// A colon-bearing OIDC target from a global caller triggers the
+			// global-collision lookup; no twin exists in these fixtures, so it
+			// returns empty and the op proceeds.
+			if tt.namespacesEnabled && tt.userType == string(models.UserTypeInputOidc) && conv.NameHasPrefix(tt.userID) {
+				controller.On("GetRolesForUserOrGroup", conv.ScopedSubjectUser(authentication.AuthTypeOIDC, tt.userID, true), authentication.AuthTypeOIDC, false).Return(map[string][]authorization.Policy{}, nil)
+			}
+
 			switch tt.operation {
 			case opAssign:
 				if tt.want == wantOK {

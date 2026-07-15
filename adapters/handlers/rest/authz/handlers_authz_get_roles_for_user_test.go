@@ -361,6 +361,11 @@ func TestGetRolesForUser_OIDCSlot(t *testing.T) {
 			authorizer.On("Authorize", mock.Anything, principal, authorization.VerbWithScope(authorization.READ, authorization.ROLE_SCOPE_ALL), authorization.Roles()[0]).Return(nil).Maybe()
 			authorizer.On("AuthorizeSilent", mock.Anything, principal, mock.Anything, mock.Anything).Return(nil).Maybe()
 			controller.On("GetRolesForUserOrGroup", tt.groupKey, authentication.AuthTypeOIDC, false).Return(roles, nil)
+			// A colon-bearing OIDC target triggers the global-collision lookup on
+			// the slotted twin; no twin exists here, so the read proceeds.
+			if conv.NameHasPrefix(tt.userID) {
+				controller.On("GetRolesForUserOrGroup", conv.ScopedSubjectUser(authentication.AuthTypeOIDC, tt.userID, true), authentication.AuthTypeOIDC, false).Return(map[string][]authorization.Policy{}, nil)
+			}
 
 			h := &authZHandlers{
 				authorizer:        authorizer,
@@ -679,6 +684,9 @@ func TestGetRolesForUser_GlobalOIDCSelfFlagNoForeignDisclosure(t *testing.T) {
 	authorizer.On("Authorize", mock.Anything, principal, authorization.READ, authorization.Users("customer1:carol")[0]).Return(nil).Maybe()
 	authorizer.On("Authorize", mock.Anything, principal, authorization.VerbWithScope(authorization.READ, authorization.ROLE_SCOPE_ALL), authorization.Roles()[0]).Return(fmt.Errorf("no all")).Maybe()
 	authorizer.On("AuthorizeSilent", mock.Anything, principal, mock.Anything, mock.Anything).Return(fmt.Errorf("not held")).Maybe()
+	// The global-collision lookup finds no slotted twin, so the read proceeds
+	// against the namespaced subject.
+	controller.On("GetRolesForUserOrGroup", ":customer1:carol", authentication.AuthTypeOIDC, false).Return(map[string][]authorization.Policy{}, nil)
 	controller.On("GetRolesForUserOrGroup", "customer1:carol", authentication.AuthTypeOIDC, false).Return(map[string][]authorization.Policy{
 		authorization.Admin: {{Resource: authorization.Collections("X")[0], Verb: authorization.READ, Domain: authorization.SchemaDomain}},
 	}, nil)
